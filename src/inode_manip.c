@@ -1,17 +1,11 @@
 #include "filesys.h"
-
+#include "utility.h"
+#include "debug.h"
 #include <string.h>
 #include <assert.h>
 
-#include "utility.h"
-#include "debug.h"
-
 #define INDIRECT_DBLOCK_INDEX_COUNT (DATA_BLOCK_SIZE / sizeof(dblock_index_t) - 1)
-#define INDIRECT_DBLOCK_MAX_DATA_SIZE ( DATA_BLOCK_SIZE * INDIRECT_DBLOCK_INDEX_COUNT )
-
 #define NEXT_INDIRECT_INDEX_OFFSET (DATA_BLOCK_SIZE - sizeof(dblock_index_t))
-
-// ----------------------- UTILITY FUNCTION ----------------------- //
 
 static fs_retcode_t get_or_allocate_indirect_data_block(filesystem_t *fs, inode_t *inode, size_t indirect_index, dblock_index_t *result) {
     fs_retcode_t ret;
@@ -33,7 +27,7 @@ static fs_retcode_t get_or_allocate_indirect_data_block(filesystem_t *fs, inode_
             index_arr[INDIRECT_DBLOCK_INDEX_COUNT] = new_index;
             memset(fs->dblocks + new_index * DATA_BLOCK_SIZE, 0, DATA_BLOCK_SIZE);
         }
-        current = ((dblock_index_t *) (fs->dblocks + current * DATA_BLOCK_SIZE))[INDIRECT_DBLOCK_INDEX_COUNT];
+        current = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE)[INDIRECT_DBLOCK_INDEX_COUNT];
         rem -= INDIRECT_DBLOCK_INDEX_COUNT;
     }
     dblock_index_t *index_arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
@@ -67,19 +61,17 @@ static fs_retcode_t get_data_block(filesystem_t *fs, inode_t *inode, size_t bloc
     }
 }
 
-// ----------------------- CORE FUNCTION ----------------------- //
-
 fs_retcode_t inode_write_data(filesystem_t *fs, inode_t *inode, void *data, size_t n) {
     if (!fs || !inode || !data) return INVALID_INPUT;
     size_t current_size = inode->internal.file_size;
     size_t new_size = current_size + n;
     size_t blocks_required = (new_size + DATA_BLOCK_SIZE - 1) / DATA_BLOCK_SIZE;
-    size_t current_blocks = (current_size + DATA_BLOCK_SIZE - 1) / DATA_BLOCK_SIZE;
+    size_t current_blocks = (current_size == 0) ? 0 : ((current_size - 1) / DATA_BLOCK_SIZE + 1);
     size_t additional_blocks = (blocks_required > current_blocks) ? (blocks_required - current_blocks) : 0;
     size_t required_index_blocks = 0;
     if (blocks_required > INODE_DIRECT_BLOCK_COUNT) {
-        size_t required_indirect_entries = blocks_required - INODE_DIRECT_BLOCK_COUNT;
-        required_index_blocks = (required_indirect_entries + INDIRECT_DBLOCK_INDEX_COUNT - 1) / INDIRECT_DBLOCK_INDEX_COUNT;
+        size_t req = blocks_required - INODE_DIRECT_BLOCK_COUNT;
+        required_index_blocks = (req + INDIRECT_DBLOCK_INDEX_COUNT - 1) / INDIRECT_DBLOCK_INDEX_COUNT;
     }
     size_t current_index_blocks = 0;
     if (inode->internal.indirect_dblock != 0) {
@@ -101,10 +93,11 @@ fs_retcode_t inode_write_data(filesystem_t *fs, inode_t *inode, void *data, size
     size_t block_index = current_blocks;
     if (offset_in_block != 0 && current_blocks > 0) {
         dblock_index_t dblock_id;
-        if (current_blocks <= INODE_DIRECT_BLOCK_COUNT) {
+        if (current_blocks <= INODE_DIRECT_BLOCK_COUNT)
             dblock_id = inode->internal.direct_data[current_blocks - 1];
-        } else {
-            if (get_data_block(fs, inode, current_blocks - 1, &dblock_id) != SUCCESS) return INVALID_INPUT;
+        else {
+            if (get_data_block(fs, inode, current_blocks - 1, &dblock_id) != SUCCESS)
+                return INVALID_INPUT;
         }
         size_t space_in_block = DATA_BLOCK_SIZE - offset_in_block;
         size_t to_copy = (bytes_remaining < space_in_block) ? bytes_remaining : space_in_block;
@@ -130,9 +123,9 @@ fs_retcode_t inode_write_data(filesystem_t *fs, inode_t *inode, void *data, size
         }
         size_t to_copy = (bytes_remaining < DATA_BLOCK_SIZE) ? bytes_remaining : DATA_BLOCK_SIZE;
         dblock_index_t current_dblock;
-        if (block_index < INODE_DIRECT_BLOCK_COUNT) {
+        if (block_index < INODE_DIRECT_BLOCK_COUNT)
             current_dblock = inode->internal.direct_data[block_index];
-        } else {
+        else {
             if (get_data_block(fs, inode, block_index, &current_dblock) != SUCCESS) {
                 inode->internal.file_size = original_size;
                 return INVALID_INPUT;
@@ -162,7 +155,8 @@ fs_retcode_t inode_read_data(filesystem_t *fs, inode_t *inode, size_t offset, vo
     size_t remaining = to_read, copied = 0;
     while (remaining > 0) {
         dblock_index_t dblock;
-        if (get_data_block(fs, inode, start_block, &dblock) != SUCCESS) return INVALID_INPUT;
+        if (get_data_block(fs, inode, start_block, &dblock) != SUCCESS)
+            return INVALID_INPUT;
         size_t copy_size = DATA_BLOCK_SIZE - block_offset;
         if (copy_size > remaining) copy_size = remaining;
         memcpy((byte *)buffer + copied, fs->dblocks + dblock * DATA_BLOCK_SIZE + block_offset, copy_size);
@@ -184,7 +178,8 @@ fs_retcode_t inode_modify_data(filesystem_t *fs, inode_t *inode, size_t offset, 
     size_t current = offset, remaining = overwrite, copied = 0;
     while (remaining > 0) {
         dblock_index_t dblock;
-        if (get_data_block(fs, inode, current / DATA_BLOCK_SIZE, &dblock) != SUCCESS) return INVALID_INPUT;
+        if (get_data_block(fs, inode, current / DATA_BLOCK_SIZE, &dblock) != SUCCESS)
+            return INVALID_INPUT;
         size_t block_offset = current % DATA_BLOCK_SIZE;
         size_t copy_size = DATA_BLOCK_SIZE - block_offset;
         if (copy_size > remaining) copy_size = remaining;
@@ -194,37 +189,37 @@ fs_retcode_t inode_modify_data(filesystem_t *fs, inode_t *inode, size_t offset, 
         remaining -= copy_size;
     }
     if (appended > 0) {
-        if (inode_write_data(fs, inode, (byte *)buffer + copied, appended) != SUCCESS) return INSUFFICIENT_DBLOCKS;
+        if (inode_write_data(fs, inode, (byte *)buffer + copied, appended) != SUCCESS)
+            return INSUFFICIENT_DBLOCKS;
     }
     return SUCCESS;
 }
-
 
 fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size) {
     if (!fs || !inode) return INVALID_INPUT;
     if (new_size > inode->internal.file_size) return INVALID_INPUT;
     size_t current_size = inode->internal.file_size;
-    size_t current_blocks = (current_size == 0) ? 0 : ((current_size - 1) / DATA_BLOCK_SIZE + 1);
-    size_t new_blocks = (new_size == 0) ? 0 : ((new_size - 1) / DATA_BLOCK_SIZE + 1);
+    size_t current_blocks = (current_size == 0 ? 0 : ((current_size - 1) / DATA_BLOCK_SIZE + 1));
+    size_t new_blocks = (new_size == 0 ? 0 : ((new_size - 1) / DATA_BLOCK_SIZE + 1));
     for (size_t b = new_blocks; b < current_blocks; b++) {
         if (b < INODE_DIRECT_BLOCK_COUNT) {
             release_dblock(fs, fs->dblocks + inode->internal.direct_data[b] * DATA_BLOCK_SIZE);
             inode->internal.direct_data[b] = 0;
         } else {
-            size_t indirect_index = b - INODE_DIRECT_BLOCK_COUNT;
             dblock_index_t dblock;
             if (get_data_block(fs, inode, b, &dblock) != SUCCESS)
                 return INVALID_INPUT;
             release_dblock(fs, fs->dblocks + dblock * DATA_BLOCK_SIZE);
-            size_t rem = indirect_index;
+            size_t indirect_index = b - INODE_DIRECT_BLOCK_COUNT;
             dblock_index_t current = inode->internal.indirect_dblock;
+            size_t rem = indirect_index;
             while (rem >= INDIRECT_DBLOCK_INDEX_COUNT) {
-                dblock_index_t *index_arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
-                current = index_arr[INDIRECT_DBLOCK_INDEX_COUNT];
+                dblock_index_t *arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
+                current = arr[INDIRECT_DBLOCK_INDEX_COUNT];
                 rem -= INDIRECT_DBLOCK_INDEX_COUNT;
             }
-            dblock_index_t *index_arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
-            index_arr[rem] = 0;
+            dblock_index_t *arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
+            arr[rem] = 0;
         }
     }
     if (new_blocks > 0 && (new_size % DATA_BLOCK_SIZE != 0)) {
@@ -235,14 +230,14 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
             if (get_data_block(fs, inode, new_blocks - 1, &last_block) != SUCCESS)
                 return INVALID_INPUT;
         }
-        size_t offset = new_size % DATA_BLOCK_SIZE;
-        memset(fs->dblocks + last_block * DATA_BLOCK_SIZE + offset, 0, DATA_BLOCK_SIZE - offset);
+        size_t tail_offset = new_size % DATA_BLOCK_SIZE;
+        memset(fs->dblocks + last_block * DATA_BLOCK_SIZE + tail_offset, 0, DATA_BLOCK_SIZE - tail_offset);
     }
     if (new_blocks <= INODE_DIRECT_BLOCK_COUNT && inode->internal.indirect_dblock != 0) {
         dblock_index_t current = inode->internal.indirect_dblock;
         while (current != 0) {
-            dblock_index_t *index_arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
-            dblock_index_t next = index_arr[INDIRECT_DBLOCK_INDEX_COUNT];
+            dblock_index_t *arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
+            dblock_index_t next = arr[INDIRECT_DBLOCK_INDEX_COUNT];
             release_dblock(fs, fs->dblocks + current * DATA_BLOCK_SIZE);
             current = next;
         }
