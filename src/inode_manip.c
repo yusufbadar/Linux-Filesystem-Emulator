@@ -204,8 +204,8 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
     if (!fs || !inode) return INVALID_INPUT;
     if (new_size > inode->internal.file_size) return INVALID_INPUT;
     size_t current_size = inode->internal.file_size;
-    size_t current_blocks = (current_size + DATA_BLOCK_SIZE - 1) / DATA_BLOCK_SIZE;
-    size_t new_blocks = (new_size + DATA_BLOCK_SIZE - 1) / DATA_BLOCK_SIZE;
+    size_t current_blocks = (current_size == 0) ? 0 : ((current_size - 1) / DATA_BLOCK_SIZE + 1);
+    size_t new_blocks = (new_size == 0) ? 0 : ((new_size - 1) / DATA_BLOCK_SIZE + 1);
     for (size_t b = new_blocks; b < current_blocks; b++) {
         if (b < INODE_DIRECT_BLOCK_COUNT) {
             release_dblock(fs, fs->dblocks + inode->internal.direct_data[b] * DATA_BLOCK_SIZE);
@@ -213,7 +213,8 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
         } else {
             size_t indirect_index = b - INODE_DIRECT_BLOCK_COUNT;
             dblock_index_t dblock;
-            if (get_data_block(fs, inode, b, &dblock) != SUCCESS) return INVALID_INPUT;
+            if (get_data_block(fs, inode, b, &dblock) != SUCCESS)
+                return INVALID_INPUT;
             release_dblock(fs, fs->dblocks + dblock * DATA_BLOCK_SIZE);
             size_t rem = indirect_index;
             dblock_index_t current = inode->internal.indirect_dblock;
@@ -225,6 +226,17 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
             dblock_index_t *index_arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
             index_arr[rem] = 0;
         }
+    }
+    if (new_blocks > 0 && (new_size % DATA_BLOCK_SIZE != 0)) {
+        dblock_index_t last_block;
+        if (new_blocks <= INODE_DIRECT_BLOCK_COUNT)
+            last_block = inode->internal.direct_data[new_blocks - 1];
+        else {
+            if (get_data_block(fs, inode, new_blocks - 1, &last_block) != SUCCESS)
+                return INVALID_INPUT;
+        }
+        size_t offset = new_size % DATA_BLOCK_SIZE;
+        memset(fs->dblocks + last_block * DATA_BLOCK_SIZE + offset, 0, DATA_BLOCK_SIZE - offset);
     }
     if (new_blocks <= INODE_DIRECT_BLOCK_COUNT && inode->internal.indirect_dblock != 0) {
         dblock_index_t current = inode->internal.indirect_dblock;
