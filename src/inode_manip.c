@@ -3,8 +3,9 @@
 #include "debug.h"
 #include <string.h>
 #include <assert.h>
+#include <stdbool.h>
 
-#define INDIRECT_DBLOCK_INDEX_COUNT (DATA_BLOCK_SIZE / sizeof(dblock_index_t) - 1)
+#define INDIRECT_DBLOCK_INDEX_COUNT (DATA_BLOCK_SIZE / sizeof(dblock_index_t) - 1
 #define NEXT_INDIRECT_INDEX_OFFSET (DATA_BLOCK_SIZE - sizeof(dblock_index_t))
 
 static fs_retcode_t get_or_allocate_indirect_data_block(filesystem_t *fs, inode_t *inode, 
@@ -141,7 +142,7 @@ fs_retcode_t inode_read_data(filesystem_t *fs, inode_t *inode, size_t offset, vo
     *bytes_read = 0;
     size_t file_size = inode->internal.file_size;
     
-    if (offset >= file_size) return SUCCESS; 
+    if (offset >= file_size) return SUCCESS;
     
     size_t to_read = (offset + n > file_size) ? (file_size - offset) : n;
     *bytes_read = to_read;
@@ -173,7 +174,6 @@ fs_retcode_t inode_read_data(filesystem_t *fs, inode_t *inode, size_t offset, vo
 fs_retcode_t inode_modify_data(filesystem_t *fs, inode_t *inode, size_t offset, void *buffer, size_t n) {
     if (!fs || !inode || !buffer) return INVALID_INPUT;
     if (n == 0) return SUCCESS;
-
     size_t file_size = inode->internal.file_size;
     if (offset > file_size) return INVALID_INPUT;
 
@@ -244,15 +244,16 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
         }
     }
 
+    int has_entries;
     dblock_index_t prev = 0;
     dblock_index_t current = inode->internal.indirect_dblock;
     while (current != 0) {
         dblock_index_t *arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
-        bool has_entries = false;
+        has_entries = 0;
         
         for (size_t i = 0; i < INDIRECT_DBLOCK_INDEX_COUNT; i++) {
             if (arr[i] != 0) {
-                has_entries = true;
+                has_entries = 1;
                 break;
             }
         }
@@ -272,7 +273,6 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
             current = arr[INDIRECT_DBLOCK_INDEX_COUNT];
         }
     }
-
     if (new_size > 0 && new_size % DATA_BLOCK_SIZE != 0) {
         dblock_index_t last_block;
         fs_retcode_t ret = get_data_block(fs, inode, new_blocks - 1, &last_block);
