@@ -7,7 +7,8 @@
 #define DIRECTORY_ENTRY_SIZE (sizeof(inode_index_t) + MAX_FILE_NAME_LEN)
 #define DIRECTORY_ENTRIES_PER_DATABLOCK (DATA_BLOCK_SIZE / DIRECTORY_ENTRY_SIZE)
 //Helpers//
-static int resolve_parent(terminal_context_t *context, const char *path, inode_t **parent, char *base_name_out) {
+static int resolve_parent(terminal_context_t *context, const char *path,
+                          inode_t **parent, char *base_name_out) {
     char *dup = strdup(path);
     if (!dup)
         return -1;
@@ -32,9 +33,8 @@ static int resolve_parent(terminal_context_t *context, const char *path, inode_t
                     memcpy(&idx, buf, sizeof(inode_index_t));
                     if (idx == 0)
                         continue;
-                    char entry_name[MAX_FILE_NAME_LEN + 1];
+                    char entry_name[MAX_FILE_NAME_LEN + 1] = {0};
                     memcpy(entry_name, buf + sizeof(inode_index_t), MAX_FILE_NAME_LEN);
-                    entry_name[MAX_FILE_NAME_LEN] = '\0';
                     if (strcmp(token, entry_name) == 0) {
                         inode_t *child = &context->fs->inodes[idx];
                         if (child->internal.file_type != DIRECTORY) {
