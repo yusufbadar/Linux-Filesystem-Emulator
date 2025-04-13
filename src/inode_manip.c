@@ -199,27 +199,27 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
     if (!fs || !inode) return INVALID_INPUT;
     if (new_size > inode->internal.file_size) return INVALID_INPUT;
     size_t current_size = inode->internal.file_size;
-    size_t current_blocks = (current_size == 0) ? 0 : ((current_size + DATA_BLOCK_SIZE - 1) / DATA_BLOCK_SIZE);
-    size_t new_blocks = (new_size == 0) ? 0 : ((new_size + DATA_BLOCK_SIZE - 1) / DATA_BLOCK_SIZE);
+    size_t current_blocks = (current_size == 0 ? 0 : ((current_size - 1) / DATA_BLOCK_SIZE + 1));
+    size_t new_blocks = (new_size == 0 ? 0 : ((new_size - 1) / DATA_BLOCK_SIZE + 1));
     for (size_t b = new_blocks; b < current_blocks; b++) {
         if (b < INODE_DIRECT_BLOCK_COUNT) {
             release_dblock(fs, fs->dblocks + inode->internal.direct_data[b] * DATA_BLOCK_SIZE);
+            inode->internal.direct_data[b] = 0;
         } else {
-            size_t indirect_index = b - INODE_DIRECT_BLOCK_COUNT;
             dblock_index_t dblock;
             if (get_data_block(fs, inode, b, &dblock) != SUCCESS)
                 return INVALID_INPUT;
             release_dblock(fs, fs->dblocks + dblock * DATA_BLOCK_SIZE);
-            {
-                size_t rem = indirect_index;
-                dblock_index_t current = inode->internal.indirect_dblock;
-                while (rem >= INDIRECT_DBLOCK_INDEX_COUNT) {
-                    dblock_index_t *index_arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
-                    current = index_arr[INDIRECT_DBLOCK_INDEX_COUNT];
-                    rem -= INDIRECT_DBLOCK_INDEX_COUNT;
-                }
-                dblock_index_t *index_arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
+            size_t indirect_index = b - INODE_DIRECT_BLOCK_COUNT;
+            dblock_index_t current = inode->internal.indirect_dblock;
+            size_t rem = indirect_index;
+            while (rem >= INDIRECT_DBLOCK_INDEX_COUNT) {
+                dblock_index_t *arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
+                current = arr[INDIRECT_DBLOCK_INDEX_COUNT];
+                rem -= INDIRECT_DBLOCK_INDEX_COUNT;
             }
+            dblock_index_t *arr = cast_dblock_ptr(fs->dblocks + current * DATA_BLOCK_SIZE);
+            arr[rem] = 0;
         }
     }
     if (new_blocks > 0 && (new_size % DATA_BLOCK_SIZE != 0)) {
