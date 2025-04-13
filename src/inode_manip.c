@@ -298,11 +298,9 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
     if (new_size > inode->internal.file_size) return INVALID_INPUT;
     size_t old_size = inode->internal.file_size;
     if (new_size == old_size) return SUCCESS;
-    size_t old_blocks = (old_size == 0) ? 0 : ((old_size - 1) / DATA_BLOCK_SIZE + 1);
-    size_t new_blocks = (new_size == 0) ? 0 : ((new_size - 1) / DATA_BLOCK_SIZE + 1);
+    size_t old_blocks = (old_size == 0 ? 0 : ((old_size - 1) / DATA_BLOCK_SIZE + 1));
+    size_t new_blocks = (new_size == 0 ? 0 : ((new_size - 1) / DATA_BLOCK_SIZE + 1));
     size_t direct = INODE_DIRECT_BLOCK_COUNT;
-    size_t old_indirect = (old_blocks > direct) ? (old_blocks - direct) : 0;
-    size_t new_indirect = (new_blocks > direct) ? (new_blocks - direct) : 0;
     size_t i;
     for (i = new_blocks; i < old_blocks; i++) {
         if (i < direct) {
@@ -339,7 +337,7 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
             inode->internal.indirect_dblock = 0;
         }
     } else {
-        size_t needed_slots = new_indirect;
+        size_t needed_slots = (new_blocks > direct) ? (new_blocks - direct) : 0;
         dblock_index_t prev = 0, cur = inode->internal.indirect_dblock;
         size_t count = 0;
         while (cur != 0) {
@@ -367,7 +365,6 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
     inode->internal.file_size = new_size;
     return SUCCESS;
 }
-
 
 fs_retcode_t inode_release_data(filesystem_t *fs, inode_t *inode) {
     if (!fs || !inode) return INVALID_INPUT;
