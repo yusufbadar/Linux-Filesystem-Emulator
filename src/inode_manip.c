@@ -8,7 +8,6 @@
 #define INDIRECT_DBLOCK_INDEX_COUNT (DATA_BLOCK_SIZE / sizeof(dblock_index_t) - 1)
 #define NEXT_INDIRECT_INDEX_OFFSET (DATA_BLOCK_SIZE - sizeof(dblock_index_t))
 
-// Helper to get data block index, WITHOUT allocation
 static fs_retcode_t get_data_block_index(filesystem_t *fs, inode_t *inode, size_t block_index, dblock_index_t *result) {
     if (!fs || !inode || !result) return INVALID_INPUT;
 
@@ -297,102 +296,74 @@ fs_retcode_t inode_modify_data(filesystem_t *fs, inode_t *inode, size_t offset, 
 fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size) {
     if (!fs || !inode) return INVALID_INPUT;
     if (new_size > inode->internal.file_size) return INVALID_INPUT;
-
-    size_t current_size = inode->internal.file_size;
-    if (new_size == current_size) {
-        return SUCCESS;
-    }
-
-    size_t current_blocks = (current_size + DATA_BLOCK_SIZE - 1) / DATA_BLOCK_SIZE;
-    size_t new_blocks = (new_size + DATA_BLOCK_SIZE - 1) / DATA_BLOCK_SIZE;
-
-
-    for (size_t b_idx = current_blocks; b_idx > new_blocks; --b_idx) {
-        size_t block_to_release_logical_idx = b_idx - 1;
-        dblock_index_t dblock_physical_idx = 0;
-
-        if (block_to_release_logical_idx < INODE_DIRECT_BLOCK_COUNT) {
-            dblock_physical_idx = inode->internal.direct_data[block_to_release_logical_idx];
-            inode->internal.direct_data[block_to_release_logical_idx] = 0;
+    size_t old_size = inode->internal.file_size;
+    if (new_size == old_size) return SUCCESS;
+    size_t old_blocks = (old_size == 0) ? 0 : ((old_size - 1) / DATA_BLOCK_SIZE + 1);
+    size_t new_blocks = (new_size == 0) ? 0 : ((new_size - 1) / DATA_BLOCK_SIZE + 1);
+    size_t direct = INODE_DIRECT_BLOCK_COUNT;
+    size_t old_indirect = (old_blocks > direct) ? (old_blocks - direct) : 0;
+    size_t new_indirect = (new_blocks > direct) ? (new_blocks - direct) : 0;
+    size_t i;
+    for (i = new_blocks; i < old_blocks; i++) {
+        if (i < direct) {
+            dblock_index_t d = inode->internal.direct_data[i];
+            if (d != 0) {
+                release_dblock(fs, fs->dblocks + d * DATA_BLOCK_SIZE);
+                inode->internal.direct_data[i] = 0;
+            }
         } else {
-            size_t indirect_index = block_to_release_logical_idx - INODE_DIRECT_BLOCK_COUNT;
-            dblock_index_t current_index_block = inode->internal.indirect_dblock;
-            size_t rem = indirect_index;
-
-            while (current_index_block != 0 && rem >= INDIRECT_DBLOCK_INDEX_COUNT) {
-                 if (current_index_block >= fs->dblock_count) return SYSTEM_ERROR;
-                 dblock_index_t *arr = cast_dblock_ptr(fs->dblocks + current_index_block * DATA_BLOCK_SIZE);
-                 current_index_block = arr[INDIRECT_DBLOCK_INDEX_COUNT];
-                 rem -= INDIRECT_DBLOCK_INDEX_COUNT;
+            size_t idx = i - direct;
+            dblock_index_t cur = inode->internal.indirect_dblock;
+            size_t rem = idx;
+            while (rem >= INDIRECT_DBLOCK_INDEX_COUNT) {
+                dblock_index_t *arr = cast_dblock_ptr(fs->dblocks + cur * DATA_BLOCK_SIZE);
+                cur = arr[INDIRECT_DBLOCK_INDEX_COUNT];
+                rem -= INDIRECT_DBLOCK_INDEX_COUNT;
             }
-
-            if (current_index_block != 0 && current_index_block < fs->dblock_count) {
-                 dblock_index_t *arr = cast_dblock_ptr(fs->dblocks + current_index_block * DATA_BLOCK_SIZE);
-                 dblock_physical_idx = arr[rem];
-                 arr[rem] = 0;
-            } else {
-                 dblock_physical_idx = 0;
+            dblock_index_t *slot = cast_dblock_ptr(fs->dblocks + cur * DATA_BLOCK_SIZE) + rem;
+            if (*slot != 0) {
+                release_dblock(fs, fs->dblocks + (*slot) * DATA_BLOCK_SIZE);
+                *slot = 0;
             }
-        }
-
-        if (dblock_physical_idx != 0 && dblock_physical_idx < fs->dblock_count) {
-             fs_retcode_t rel_ret = release_dblock(fs, fs->dblocks + dblock_physical_idx * DATA_BLOCK_SIZE);
-             if (rel_ret != SUCCESS) return rel_ret;
-        } else if (dblock_physical_idx >= fs->dblock_count) {
-             return SYSTEM_ERROR;
         }
     }
-
-
-    size_t required_index_blocks = 0;
-     if (new_blocks > INODE_DIRECT_BLOCK_COUNT) {
-         size_t last_needed_data_block_logical_idx = new_blocks - 1;
-         size_t last_needed_indirect_idx = last_needed_data_block_logical_idx - INODE_DIRECT_BLOCK_COUNT;
-         required_index_blocks = (last_needed_indirect_idx / INDIRECT_DBLOCK_INDEX_COUNT) + 1;
-     } else {
-         required_index_blocks = 0;
-     }
-
-    dblock_index_t current_index_block = inode->internal.indirect_dblock;
-    dblock_index_t prev_index_block_ptr_loc = 0;
-    size_t index_block_count = 0;
-
-    while (current_index_block != 0 && current_index_block < fs->dblock_count) {
-        index_block_count++;
-        dblock_index_t *current_arr = cast_dblock_ptr(fs->dblocks + current_index_block * DATA_BLOCK_SIZE);
-        dblock_index_t next_in_chain = current_arr[INDIRECT_DBLOCK_INDEX_COUNT];
-
-        if (index_block_count > required_index_blocks) {
-
-            if (prev_index_block_ptr_loc == 0) {
+    if (new_blocks <= direct) {
+        if (inode->internal.indirect_dblock != 0) {
+            dblock_index_t cur = inode->internal.indirect_dblock;
+            while (cur != 0) {
+                dblock_index_t *arr = cast_dblock_ptr(fs->dblocks + cur * DATA_BLOCK_SIZE);
+                dblock_index_t nxt = arr[INDIRECT_DBLOCK_INDEX_COUNT];
+                release_dblock(fs, fs->dblocks + cur * DATA_BLOCK_SIZE);
+                cur = nxt;
+            }
+            inode->internal.indirect_dblock = 0;
+        }
+    } else {
+        size_t needed_slots = new_indirect;
+        dblock_index_t prev = 0, cur = inode->internal.indirect_dblock;
+        size_t count = 0;
+        while (cur != 0) {
+            count += INDIRECT_DBLOCK_INDEX_COUNT;
+            if (count >= needed_slots) break;
+            prev = cur;
+            dblock_index_t *arr = cast_dblock_ptr(fs->dblocks + cur * DATA_BLOCK_SIZE);
+            cur = arr[INDIRECT_DBLOCK_INDEX_COUNT];
+        }
+        if (cur != 0) {
+            if (prev == 0)
                 inode->internal.indirect_dblock = 0;
-            } else {
-                 if (prev_index_block_ptr_loc >= fs->dblock_count) return SYSTEM_ERROR;
-                dblock_index_t *prev_arr = cast_dblock_ptr(fs->dblocks + prev_index_block_ptr_loc * DATA_BLOCK_SIZE);
+            else {
+                dblock_index_t *prev_arr = cast_dblock_ptr(fs->dblocks + prev * DATA_BLOCK_SIZE);
                 prev_arr[INDIRECT_DBLOCK_INDEX_COUNT] = 0;
             }
-
-            dblock_index_t block_to_release = current_index_block;
-            while (block_to_release != 0 && block_to_release < fs->dblock_count) {
-                 dblock_index_t *release_arr = cast_dblock_ptr(fs->dblocks + block_to_release * DATA_BLOCK_SIZE);
-                 dblock_index_t next_to_release = release_arr[INDIRECT_DBLOCK_INDEX_COUNT];
-                 fs_retcode_t rel_ret = release_dblock(fs, fs->dblocks + block_to_release * DATA_BLOCK_SIZE);
-                 if (rel_ret != SUCCESS) return rel_ret;
-                 block_to_release = next_to_release;
+            while (cur != 0) {
+                dblock_index_t *arr = cast_dblock_ptr(fs->dblocks + cur * DATA_BLOCK_SIZE);
+                dblock_index_t nxt = arr[INDIRECT_DBLOCK_INDEX_COUNT];
+                release_dblock(fs, fs->dblocks + cur * DATA_BLOCK_SIZE);
+                cur = nxt;
             }
-             if (block_to_release >= fs->dblock_count && block_to_release != 0) return SYSTEM_ERROR;
-
-
-            current_index_block = 0;
-        } else {
-             prev_index_block_ptr_loc = current_index_block;
-             current_index_block = next_in_chain;
         }
     }
-
-     if (current_index_block >= fs->dblock_count && current_index_block != 0) return SYSTEM_ERROR;
-
-
     inode->internal.file_size = new_size;
     return SUCCESS;
 }
