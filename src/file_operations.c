@@ -209,22 +209,31 @@ size_t fs_write(fs_file_t file, void *buffer, size_t n)
     return n;
 }
 
-int fs_seek(fs_file_t file, seek_mode_t seek_mode, int offset)
-{
-    if (!file) return -1;
-    size_t sz = file->inode->internal.file_size;
-    long newoff = 0;
-    if (seek_mode == FS_SEEK_START) {
-        newoff = offset;
-    } else if (seek_mode == FS_SEEK_CURRENT) {
-        newoff = (long)file->offset + offset;
-    } else if (seek_mode == FS_SEEK_END) {
-        newoff = (long)sz + offset;
-    } else {
+int fs_seek(fs_file_t file, seek_mode_t mode, int offset) {
+    if (file == NULL)
         return -1;
+
+    int new_offset;
+    switch (mode) {
+        case FS_SEEK_START:
+            new_offset = offset;
+            break;
+        case FS_SEEK_CURRENT:
+            new_offset = (int)file->offset + offset;
+            break;
+        case FS_SEEK_END:
+            new_offset = (int)file->inode->internal.file_size + offset;
+            break;
+        default:
+            return -1;
     }
-    if (newoff < 0) return -1;
-    if ((size_t)newoff > sz) newoff = sz;
-    file->offset = (size_t)newoff;
+
+    if (new_offset < 0)
+        return -1;
+
+    if ((size_t)new_offset > file->inode->internal.file_size)
+        new_offset = file->inode->internal.file_size;
+
+    file->offset = (size_t)new_offset;
     return 0;
 }
